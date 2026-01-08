@@ -4,148 +4,189 @@ import pandas as pd
 import time
 
 # --- 頁面設定 ---
-st.set_page_config(page_title="AVGS vs 美股組合", layout="centered")
-st.title("🥊 全球小盤價值股 PK 賽")
+st.set_page_config(page_title="全球 SCV 終極對決", layout="centered")
+st.title("🥊 全球小盤價值 (SCV) 終極對決")
+st.caption("🇹🇼 100 萬本金實戰模擬 | 含 30% 股息稅與匯率影響")
 
-# --- 側邊欄設定 ---
+# --- 側邊欄 ---
 with st.sidebar:
     st.header("⚙️ 參數設定")
     
     # 1. 自動刷新
-    st.write("⏱️ **自動更新**")
-    auto_refresh = st.toggle("開啟每 60 秒自動刷新", value=False)
-    if auto_refresh:
-        st.caption("⚠️ 運行中...請勿頻繁切換參數。")
+    auto_refresh = st.toggle("⏱️ 每 60 秒自動刷新", value=False)
     
     st.divider()
 
-    # 2. 參數
-    period = st.selectbox("比較時間範圍", ["YTD", "3mo", "6mo", "1y", "max"], index=3)
+    # 2. 時間與本金
+    period = st.selectbox("比較時間範圍", ["YTD", "6mo", "1y", "2y", "max"], index=3)
+    principal = st.number_input("初始本金 (TWD)", value=1000000, step=100000)
     
-    st.write("🇺🇸 **美股資金配置 (本金分配)**")
-    combo_type = st.radio("資金分配比例:", ("50% / 50%", "60% / 40%", "70% / 30%"), index=0)
+    st.divider()
     
-    # 解析比例
-    if "60" in combo_type:
-        w_avuv, w_avdv = 0.6, 0.4
-    elif "70" in combo_type:
-        w_avuv, w_avdv = 0.7, 0.3
-    else:
-        w_avuv, w_avdv = 0.5, 0.5
+    # 3. 組合比例
+    st.write("🇺🇸 **美股組合比例 (AVUV / AVDV)**")
+    combo_ratio = st.radio("資金分配:", ("50% / 50%", "60% / 40%", "70% / 30%"), index=1)
+    
+    if "50" in combo_ratio: w_avuv, w_avdv = 0.5, 0.5
+    elif "60" in combo_ratio: w_avuv, w_avdv = 0.6, 0.4
+    else: w_avuv, w_avdv = 0.7, 0.3
 
-st.caption(f"邏輯：假設投入相同本金，分別買入 AVGS 與 美股組合 ({combo_type})")
+    st.divider()
+    
+    # 4. 稅務開關
+    apply_tax = st.toggle("扣除美股 30% 股息稅", value=True)
+    if apply_tax:
+        st.info("ℹ️ 已開啟 Tax Drag：\nAVUV (美) 與 AVDV (非美) 因配息較高，每日將扣除估算稅損。AVGS (英) 不扣稅。")
+
+# --- 稅務損耗參數 (年化殖利率估算) ---
+# Value 股票配息通常較高，稅的影響更明顯
+TAX_PARAMS = {
+    "AVUV": 0.018 * 0.30,  # 估算 Yield 1.8% -> 稅損 0.54%
+    "AVDV": 0.032 * 0.30,  # 估算 Yield 3.2% -> 稅損 0.96% (痛!)
+    "AVGS.L": 0.0          # 愛爾蘭註冊 -> 0%
+}
 
 # --- 核心邏輯 ---
-def load_data(period):
-    tickers = {'AVGS': 'AVGS.L', 'AVUV': 'AVUV', 'AVDV': 'AVDV', 'FX': 'USDTWD=X'}
+def load_and_process_data(period):
+    tickers = ["AVGS.L", "AVUV", "AVDV", "USDTWD=X"]
     try:
-        raw_data = yf.download(list(tickers.values()), period=period, progress=False)
+        raw = yf.download(tickers, period=period, progress=False)
+        if raw.empty: return pd.DataFrame()
+        
+        # 抓取 Adj Close
+        if 'Adj Close' in raw.columns: df = raw['Adj Close']
+        elif 'Close' in raw.columns: df = raw['Close']
+        else: df = raw
+        
+        # 欄位清理
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
+            
+        df = df.ffill().dropna()
+        return df
+
     except:
         return pd.DataFrame()
 
-    if raw_data.empty: return pd.DataFrame()
-
-    if 'Adj Close' in raw_data.columns: data = raw_data['Adj Close']
-    elif 'Close' in raw_data.columns: data = raw_data['Close']
-    else: data = raw_data
-
-    df = data.copy()
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
-
-    rename_map = {v: k for k, v in tickers.items()}
-    df.rename(columns=rename_map, inplace=True)
-    
-    # 對齊數據起點
-    df = df.ffill().dropna()
-    return df
-
-# --- 執行與顯示 ---
+# --- 主程式 ---
 try:
-    df = load_data(period)
+    df = load_and_process_data(period)
     
-    required = ['AVGS', 'AVUV', 'AVDV', 'FX']
+    required = ["AVGS.L", "AVUV", "AVDV", "USDTWD=X"]
     if df.empty or not all(col in df.columns for col in required):
-        st.warning("⏳ 讀取數據中... (若卡住請按手動刷新)")
+        st.warning("⏳ 讀取數據中... (請稍候)")
         time.sleep(3)
         st.rerun()
     else:
-        # --- 資金加權邏輯 ---
-        # 1. 先算出各檔股票的累積報酬倍數 (例如變成 1.1 倍)
-        returns_df = df / df.iloc[0]
+        # --- 1. 計算稅後淨值曲線 (Tax Adjusted NAV) ---
+        adjusted_nav = pd.DataFrame(index=df.index)
         
-        # 2. 計算組合淨值 (Net Asset Value)
-        # 公式：(權重 * AVUV倍數) + (權重 * AVDV倍數)
-        combo_nav = (w_avuv * returns_df['AVUV']) + (w_avdv * returns_df['AVDV'])
-        
-        # 3. AVGS 的淨值
-        avgs_nav = returns_df['AVGS']
+        for ticker in ["AVGS.L", "AVUV", "AVDV"]:
+            # 每日報酬率
+            daily_ret = df[ticker].pct_change().fillna(0)
+            
+            # 扣稅邏輯
+            if apply_tax and ticker in TAX_PARAMS:
+                daily_drag = TAX_PARAMS[ticker] / 252
+                daily_ret = daily_ret - daily_drag
+            
+            # 重建成淨值 (起點為 1)
+            adjusted_nav[ticker] = (1 + daily_ret).cumprod()
 
-        # --- 計算最終結果 ---
-        latest_fx = df['FX'].iloc[-1]
+        # --- 2. 資金模擬實戰 ---
+        fx = df["USDTWD=X"]
+        start_fx = fx.iloc[0]
         
-        # 為了更有感，我們假設投入 NT$ 10,000
-        initial_investment = 10000 
+        # 步驟 A: 將 100 萬台幣在 Day 1 換成美金
+        initial_usd = principal / start_fx
         
-        final_avgs_twd = initial_investment * avgs_nav.iloc[-1]
-        final_combo_twd = initial_investment * combo_nav.iloc[-1]
+        # 選手 1: AVGS (全押)
+        # 每日價值(USD) = 初始美金 * AVGS淨值增長
+        avgs_val_usd = initial_usd * adjusted_nav["AVGS.L"]
         
-        # 報酬率
-        ret_avgs_pct = (avgs_nav.iloc[-1] - 1) * 100
-        ret_combo_pct = (combo_nav.iloc[-1] - 1) * 100
+        # 選手 2: 美股組合 (拆分資金)
+        # 資金分配
+        usd_part_avuv = initial_usd * w_avuv
+        usd_part_avdv = initial_usd * w_avdv
+        
+        # 兩筆資金分別成長，最後加總
+        combo_val_usd = (usd_part_avuv * adjusted_nav["AVUV"]) + \
+                        (usd_part_avdv * adjusted_nav["AVDV"])
 
-        # --- 顯示區 ---
-        st.subheader(f"💰 戰果結算 (假設初始投入 NT$ {initial_investment:,})")
+        # 步驟 B: 每日換回台幣 (Mark to Market)
+        # 這裡我們要看「假如今天賣掉換回台幣是多少」
+        avgs_val_twd = avgs_val_usd * fx
+        combo_val_twd = combo_val_usd * fx
+        
+        # --- 3. 結算數據 ---
+        final_avgs = avgs_val_twd.iloc[-1]
+        final_combo = combo_val_twd.iloc[-1]
+        
+        avgs_ret = (final_avgs - principal) / principal * 100
+        combo_ret = (final_combo - principal) / principal * 100
+        
+        diff_val = final_avgs - final_combo
+        diff_pct = avgs_ret - combo_ret
+
+        # --- 顯示介面 ---
+        st.subheader(f"💰 戰果結算 (初始投入: NT$ {principal:,.0f})")
+        
         col1, col2 = st.columns(2)
         
-        # AVGS
+        # AVGS 卡片
         col1.metric(
-            "🇬🇧 AVGS.L (單一)", 
-            f"${final_avgs_twd:,.0f}", 
-            f"{ret_avgs_pct:+.2f}%"
+            label="🇬🇧 AVGS (全球SCV)",
+            value=f"${final_avgs:,.0f}",
+            delta=f"{avgs_ret:+.2f}%"
         )
         
-        # 組合
+        # 美股組合 卡片
         col2.metric(
-            f"🇺🇸 美股組合 ({combo_type})", 
-            f"${final_combo_twd:,.0f}", 
-            f"{ret_combo_pct:+.2f}%"
+            label=f"🇺🇸 美股組合 ({int(w_avuv*100)}/{int(w_avdv*100)})",
+            value=f"${final_combo:,.0f}",
+            delta=f"{combo_ret:+.2f}%"
         )
         
         st.divider()
-        
-        # --- 判定勝負 (新增顯示邏輯) ---
-        diff_pct = ret_avgs_pct - ret_combo_pct
-        diff_money = final_avgs_twd - final_combo_twd
-        
-        if diff_pct > 0:
-            winner_text = "AVGS 勝出！"
+
+        # 勝負判定
+        if diff_val > 0:
+            winner = "AVGS (英股) 勝出！"
             color = "green"
-            details = f"多賺 NT$ {abs(diff_money):,.0f} (領先 {abs(diff_pct):.2f}%)"
+            comment = "稅務優勢顯現：雖然 AVUV 很強，但 AVDV 的高股息稅拖累了美股組合。"
         else:
-            winner_text = "美股組合 勝出！"
-            color = "red"  # 這裡用紅色凸顯美股贏
-            details = f"多賺 NT$ {abs(diff_money):,.0f} (領先 {abs(diff_pct):.2f}%)"
+            winner = "美股組合 (AVUV+AVDV) 勝出！"
+            color = "red"
+            comment = "因子強度獲勝：儘管有稅務損耗，美股組合的漲幅仍足以抵銷成本。"
             
-        st.markdown(f"### :{color}[{winner_text}]")
-        st.markdown(f"#### {details}")
-        
-        # --- 走勢圖 ---
+        st.markdown(f"## :{color}[{winner}]")
+        st.markdown(f"#### 差距金額: NT$ {abs(diff_val):,.0f} (差距 {abs(diff_pct):.2f}%)")
+        st.caption(comment)
+
+        # --- 圖表 ---
+        st.subheader("📈 資產走勢對比 (TWD)")
         chart_data = pd.DataFrame({
-            'AVGS.L': avgs_nav * 100,      
-            f'Combo ({combo_type})': combo_nav * 100 
+            "AVGS (英股)": avgs_val_twd,
+            "Combo (美股)": combo_val_twd
         })
-        st.line_chart(chart_data, color=["#FF4B4B", "#1E90FF"])
+        st.line_chart(chart_data, color=["#00CC96", "#EF553B"])
         
-        st.caption(f"匯率換算參考: 1 USD = {latest_fx:.2f} TWD")
+        # --- 詳細數據表 ---
+        with st.expander("📊 查看詳細收益與稅務參數"):
+            st.write(f"**目前匯率**: 1 USD = {fx.iloc[-1]:.2f} TWD")
+            st.write("**稅務損耗 (Tax Drag) 設定**:")
+            st.code(f"""
+            AVUV (美股): 每年扣除約 {(TAX_PARAMS['AVUV']/0.3)*100:.1f}% Yield x 30% 稅 = {TAX_PARAMS['AVUV']*100:.2f}%
+            AVDV (非美): 每年扣除約 {(TAX_PARAMS['AVDV']/0.3)*100:.1f}% Yield x 30% 稅 = {TAX_PARAMS['AVDV']*100:.2f}%
+            AVGS (英股): 0% (已內含於股價，無額外預扣稅)
+            """)
 
 except Exception as e:
-    st.error(f"系統暫時忙碌: {e}")
+    st.error(f"發生錯誤: {e}")
 
 # --- 自動刷新 ---
 if auto_refresh:
     time.sleep(60)
     st.rerun()
-else:
-    if st.button('🔄 手動刷新'):
-        st.rerun()
+elif st.button("🔄 手動刷新"):
+    st.rerun()
