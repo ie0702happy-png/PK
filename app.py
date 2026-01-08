@@ -70,14 +70,12 @@ try:
         time.sleep(3)
         st.rerun()
     else:
-        # --- 關鍵修正：資金加權邏輯 ---
-        # 假設初始本金為 100 (歸一化)
+        # --- 資金加權邏輯 ---
         # 1. 先算出各檔股票的累積報酬倍數 (例如變成 1.1 倍)
         returns_df = df / df.iloc[0]
         
         # 2. 計算組合淨值 (Net Asset Value)
-        # 你的邏輯：本金的 50% 買 AVUV，50% 買 AVDV
-        # 公式：(0.5 * AVUV倍數) + (0.5 * AVDV倍數)
+        # 公式：(權重 * AVUV倍數) + (權重 * AVDV倍數)
         combo_nav = (w_avuv * returns_df['AVUV']) + (w_avdv * returns_df['AVDV'])
         
         # 3. AVGS 的淨值
@@ -116,22 +114,26 @@ try:
         
         st.divider()
         
-        # 判定勝負
-        diff = ret_avgs_pct - ret_combo_pct
-        if diff > 0:
-            winner = f"AVGS 勝出！ (多賺 ${final_avgs_twd - final_combo_twd:,.0f})"
+        # --- 判定勝負 (新增顯示邏輯) ---
+        diff_pct = ret_avgs_pct - ret_combo_pct
+        diff_money = final_avgs_twd - final_combo_twd
+        
+        if diff_pct > 0:
+            winner_text = "AVGS 勝出！"
             color = "green"
+            details = f"多賺 NT$ {abs(diff_money):,.0f} (領先 {abs(diff_pct):.2f}%)"
         else:
-            winner = f"美股組合 勝出！ (多賺 ${final_combo_twd - final_avgs_twd:,.0f})"
-            color = "red"
+            winner_text = "美股組合 勝出！"
+            color = "red"  # 這裡用紅色凸顯美股贏
+            details = f"多賺 NT$ {abs(diff_money):,.0f} (領先 {abs(diff_pct):.2f}%)"
             
-        st.markdown(f"### :{color}[{winner}]")
+        st.markdown(f"### :{color}[{winner_text}]")
+        st.markdown(f"#### {details}")
         
         # --- 走勢圖 ---
-        # 畫出「本金成長曲線」
         chart_data = pd.DataFrame({
-            'AVGS.L': avgs_nav * 100,      # 起點 100
-            f'Combo ({combo_type})': combo_nav * 100 # 起點 100
+            'AVGS.L': avgs_nav * 100,      
+            f'Combo ({combo_type})': combo_nav * 100 
         })
         st.line_chart(chart_data, color=["#FF4B4B", "#1E90FF"])
         
